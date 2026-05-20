@@ -85,16 +85,33 @@ export function docFromSubjectWork(work, subject) {
   };
 }
 
-async function olFetch(path, params = {}) {
+async function olFetch(path, params = {}, attempt = 0) {
   const url = new URL(path.startsWith("http") ? path : `${OL}${path}`);
   Object.entries(params).forEach(([k, v]) => {
     if (v != null) url.searchParams.set(k, String(v));
   });
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": UA },
-  });
-  if (!res.ok) throw new Error(`Open Library ${res.status}`);
-  return res.json();
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      throw new Error(`Open Library HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (attempt < 2) {
+      await sleep(400 * (attempt + 1));
+      return olFetch(path, params, attempt + 1);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function searchReadinglog(offset, limit = 100) {
@@ -139,8 +156,28 @@ export async function fetchWorkDescription(workKey) {
   return { description: (description || "").slice(0, 1200), subjects };
 }
 
-const CACHE_KEY = "bookmap-catalog-v2";
+const CACHE_KEY = "bookmap-catalog-v3";
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+
+export function clearCatalogCache() {
+  try {
+    localStorage.removeItem(CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function isValidCachedBook(book) {
+  return (
+    book &&
+    typeof book.id === "string" &&
+    typeof book.title === "string" &&
+    typeof book.author === "string" &&
+    typeof book.x === "number" &&
+    typeof book.y === "number" &&
+    Array.isArray(book.neighbors)
+  );
+}
 
 export function loadCatalogCache() {
   try {
@@ -148,6 +185,8 @@ export function loadCatalogCache() {
     if (!raw) return null;
     const { at, books } = JSON.parse(raw);
     if (Date.now() - at > CACHE_TTL_MS) return null;
+    if (!Array.isArray(books) || books.length < 20) return null;
+    if (!isValidCachedBook(books[0])) return null;
     return books;
   } catch {
     return null;
@@ -202,29 +241,46 @@ export async function loadLiveCatalog({ target = 220, onProgress } = {}) {
 
   onProgress?.("Fetching popular books from Open Library…");
   for (let offset = 0; offset < 500 && byId.size < target; offset += 100) {
-    const batch = await searchReadinglog(offset, 100);
-    add(batch);
-    onProgress?.(`Popular books: ${byId.size}…`);
-    if (batch.length < 100) break;
-    await sleep(120);
+    try {
+      const batch = await searchReadinglog(offset, 100);
+      add(batch);
+      onProgress?.(`Popular books: ${byId.size}…`);
+      if (batch.length < 100) break;
+    } catch (err) {
+      console.warn("readinglog page failed", offset, err);
+      if (byId.size >= 20) break;
+    }
+    await sleep(150);
   }
 
   onProgress?.("Adding books from subject shelves…");
   const perShelf = Math.ceil((target - byId.size) / SUBJECT_SHELVES.length) + 15;
   for (const subject of SUBJECT_SHELVES) {
     if (byId.size >= target) break;
-    const batch = await fetchSubjectWorks(subject, 0, Math.min(perShelf, 60));
-    add(batch);
-    onProgress?.(`Subject “${subject}”: ${byId.size} books…`);
-    await sleep(120);
+    try {
+      const batch = await fetchSubjectWorks(subject, 0, Math.min(perShelf, 60));
+      add(batch);
+      onProgress?.(`Subject “${subject}”: ${byId.size} books…`);
+    } catch (err) {
+      console.warn("subject fetch failed", subject, err);
+    }
+    await sleep(150);
   }
 
   const books = [...byId.values()];
-  if (books.length < 20) {
-    throw new Error("Open Library returned too few books. Try again in a moment.");
+  if (books.length < 10) {
+    throw new Error("Open Library returned too few books");
   }
 
-  saveCatalogCache(books);
+  return books;
+}
+
+export async function loadStaticFallback() {
+  const res = await fetch("./data/books.json", { cache: "no-store" });
+  if (!res.ok) throw new Error("Static fallback unavailable");
+  const data = await res.json();
+  const books = data.books || [];
+  if (books.length < 10) throw new Error("Static fallback empty");
   return books;
 }
 

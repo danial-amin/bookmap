@@ -22,7 +22,7 @@
       <header class="shell-header">
         <div class="shell-header-inner">
           <div class="brand-block">
-            <a href="/" class="brand font-serif" id="brand-home">Bookmap</a>
+            <a href="./" class="brand font-serif" id="brand-home">Bookmap</a>
             <p class="eyebrow">The tourist map of books</p>
           </div>
           <button type="button" id="explore-btn" class="btn-ghost hidden">
@@ -52,6 +52,9 @@
           <div id="loader" class="loader" aria-busy="true">
             <p class="loader-title font-serif">Loading the map</p>
             <p id="loader-detail" class="loader-detail">Connecting to Open Library…</p>
+            <button type="button" id="retry-btn" class="btn-primary loader-retry hidden">
+              Retry
+            </button>
           </div>
           <p class="map-hint">
             Drag to pan · scroll to zoom ·

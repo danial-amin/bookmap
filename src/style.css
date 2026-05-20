@@ -285,8 +285,19 @@ body {
 
 .loader-detail {
   margin: 0;
+  max-width: 18rem;
+  text-align: center;
   font-size: 0.85rem;
+  line-height: 1.45;
   color: var(--ink-muted);
+}
+
+.loader-retry {
+  margin-top: 0.75rem;
+}
+
+.loader-retry.hidden {
+  display: none;
 }
 
 /* —— Detail card —— */

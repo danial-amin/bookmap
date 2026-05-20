@@ -1,5 +1,7 @@
 import {
   loadLiveCatalog,
+  loadStaticFallback,
+  clearCatalogCache,
   enrichBooks,
   searchBooks,
   fetchWorkDescription,
@@ -43,6 +45,7 @@ const els = {
   exploreBtn: document.getElementById("explore-btn"),
   brandHome: document.getElementById("brand-home"),
   submitBtn: document.querySelector(".btn-primary"),
+  retryBtn: document.getElementById("retry-btn"),
 };
 
 const ctx = els.canvas.getContext("2d");
@@ -458,30 +461,68 @@ function onPointerUp() {
   els.wrap.classList.remove("dragging");
 }
 
-async function loadLiveData() {
-  const books = await loadLiveCatalog({
-    target: 220,
-    onProgress: setLoaderDetail,
-  });
+function showLoadError(err) {
+  hideLoader();
+  const hint =
+    err?.name === "AbortError"
+      ? "Request timed out."
+      : err?.message || "Unknown error.";
+  setLoaderDetail(
+    `${hint} Try Retry, disable ad blockers for openlibrary.org, or check your network.`
+  );
+  els.loader.classList.remove("hidden");
+  els.retryBtn?.classList.remove("hidden");
+  setStatus("Could not load books.");
+}
+
+async function loadLiveData({ forceRefresh = false } = {}) {
+  if (forceRefresh) clearCatalogCache();
+
+  els.retryBtn?.classList.add("hidden");
+  els.loader.classList.remove("hidden");
+  els.loader.setAttribute("aria-busy", "true");
+  setLoaderDetail("Connecting to Open Library…");
+
+  let books;
+  let source = "Open Library";
+
+  try {
+    books = await loadLiveCatalog({
+      target: 180,
+      onProgress: setLoaderDetail,
+    });
+  } catch (liveErr) {
+    console.warn("Live catalog failed, trying fallback", liveErr);
+    setLoaderDetail("Open Library slow — loading saved catalog…");
+    try {
+      books = await loadStaticFallback();
+      source = "saved catalog";
+    } catch (fallbackErr) {
+      showLoadError(liveErr);
+      throw liveErr;
+    }
+  }
 
   setLoaderDetail("Arranging books on the map…");
   if (!books[0]?.x || !books[0]?.neighbors?.length) {
     refreshBookGraph(books);
   }
   setBooks(books);
+  saveCatalogCache(books);
 
   hideLoader();
   exploreAll();
   render();
 
-  enrichBooks(books, { limit: 60, onProgress: setStatus }).then(() => {
-    refreshBookGraph(books);
-    saveCatalogCache(books);
-    setStatus(
-      `${books.length} books on the map — live from Open Library. Search any title.`
-    );
-    render();
-  });
+  setStatus(`${books.length} books on the map (${source}). Search any title.`);
+
+  enrichBooks(books, { limit: 40, onProgress: setStatus })
+    .then(() => {
+      refreshBookGraph(books);
+      saveCatalogCache(books);
+      render();
+    })
+    .catch(() => {});
 }
 
 function initEvents() {
@@ -491,6 +532,9 @@ function initEvents() {
   els.brandHome.addEventListener("click", (e) => {
     e.preventDefault();
     exploreAll();
+  });
+  els.retryBtn?.addEventListener("click", () => {
+    loadLiveData({ forceRefresh: true }).catch((err) => console.error(err));
   });
   els.wrap.addEventListener("wheel", onWheel, { passive: false });
   els.wrap.addEventListener("pointerdown", onPointerDown);
@@ -519,10 +563,6 @@ async function boot() {
       if (book) focusBook(book);
     }
   } catch (err) {
-    hideLoader();
-    setStatus(
-      "Could not load books from Open Library. Check your connection and refresh."
-    );
     console.error(err);
   }
 }
