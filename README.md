@@ -1,58 +1,46 @@
 # Bookmap
 
-A [Movie Map](https://www.movie-map.com/)-style site for **books**: type a title and explore similar books on an interactive map. Closer labels mean more similar.
-
-All catalog data comes from **[Open Library](https://openlibrary.org/)** — no hand-maintained title list.
+A [Movie Map](https://www.movie-map.com/)-style site for **books**: type a title and explore similar books on an interactive map. UI matches the warm **Inkwell** design system; **all book data is loaded live** from [Open Library](https://openlibrary.org/) in the browser (no static catalog required to run).
 
 ## Quick start
 
 ```bash
-# 1. Build the map (fetches popular English books from Open Library)
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r scripts/requirements.txt
-python scripts/build_books_data.py --limit 250
-
-# 2. Run the site
 npm install
 npm run dev
 ```
 
-### Data sources (`--source`)
+Open the URL Vite prints. On first load the app fetches ~200+ popular English books from Open Library, computes similarity in-browser, and draws the map. Searches hit Open Library again for titles not already on the map.
 
-| Value | What it pulls |
-|--------|----------------|
-| `mixed` (default) | Reading-list popularity **plus** works from subject shelves (fiction, sci‑fi, mystery, …) |
-| `readinglog` | `search.json?q=language:eng&sort=readinglog` — books people actually log on Open Library |
-| `subjects` | `/subjects/{shelf}.json` — top works per broad subject |
+## Data (live APIs)
 
-Options:
+| Source | Endpoint | Use |
+|--------|----------|-----|
+| Popular books | `search.json?q=language:eng&sort=readinglog` | Initial catalog |
+| Subject shelves | `/subjects/{fiction,…}.json` | Genre diversity |
+| Any search | `search.json?q=…` | Titles you type |
+| Descriptions | `/works/OL….json` | Detail panel blurbs |
+
+A 12-hour **localStorage** cache avoids refetching the full catalog every visit.
+
+### Optional offline build
+
+To bake a static `public/data/books.json` (not required for the live site):
 
 ```bash
-python scripts/build_books_data.py --limit 400 --source readinglog
-python scripts/build_books_data.py --limit 200 --skip-enrich   # faster, no per-work descriptions
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r scripts/requirements.txt
+python scripts/build_books_data.py --limit 250
 ```
 
-Results are cached in `scripts/.cache/open_library.json` so re-runs are quicker.
+## Deploy (GitHub Pages)
 
-## How it works
+```bash
+npm run build
+# push dist to gh-pages, or use the Actions workflow on danial-amin/bookmap
+```
 
-1. **Discover** — paginate Open Library APIs until `--limit` unique works are collected (filters out study guides / summaries).
-2. **Enrich** — optional work-level fetch for descriptions and subjects.
-3. **Layout** — TF‑IDF on metadata → UMAP 2D positions + nearest-neighbor similarity.
-4. **UI** — search centers your book; similar titles ring by similarity; explore mode shows the full map.
-
-## Deploy to GitHub Pages
-
-Push the repo, enable **Settings → Pages → GitHub Actions**, and push to `main`. See `.github/workflows/deploy.yml`.
-
-For a project site at `https://<user>.github.io/<repo>/`, set `base: '/<repo>/'` in `vite.config.js`.
-
-## Customize
-
-- Increase `--limit` for a denser map (slower build, more API calls).
-- Edit `SUBJECT_SHELVES` in `scripts/build_books_data.py` for different subject mix.
+Account: **danial-amin** (see `.cursor/rules/github-danial-amin.mdc` in the parent repo).
 
 ## License
 
-MIT — book metadata © [Open Library](https://openlibrary.org/) contributors.
+MIT — book metadata © Open Library contributors.
