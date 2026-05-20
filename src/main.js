@@ -379,34 +379,35 @@ async function expandSimilarFromOpenLibrary(book) {
 }
 
 async function focusBook(book, searchedAs = null) {
-  try {
-    state.lastSearchQuery = searchedAs || book.title;
-    state.centerId = book.id;
-    state.mode = "search";
-    state.selectedId = book.id;
-    state.radialNeighbors = [];
+  state.lastSearchQuery = searchedAs || book.title;
+  state.centerId = book.id;
+  state.mode = "search";
+  state.selectedId = book.id;
+  state.radialNeighbors = [];
 
+  try {
     const quick = neighborsForBook(book, state.books);
     applyRadialNeighbors(book, quick);
-
-    els.exploreBtn.classList.remove("hidden");
-    openDetailPanel(book);
-    ensureDescription(book);
-
-    els.input.value = state.lastSearchQuery;
-
-    animateCamera({
-      x: WORLD / 2,
-      y: WORLD / 2,
-      scale: Math.min(LABEL_MAX_SCALE, Math.max(1.2, 1.45)),
-    });
-    history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
-
-    expandSimilarFromOpenLibrary(book).catch((err) => console.warn(err));
   } catch (err) {
-    console.error(err);
-    throw err;
+    console.warn("Quick neighbors failed:", err);
+    book.neighbors = [];
+    state.neighborIds = new Set();
   }
+
+  els.exploreBtn.classList.remove("hidden");
+  openDetailPanel(book);
+  ensureDescription(book);
+
+  els.input.value = state.lastSearchQuery;
+
+  animateCamera({
+    x: WORLD / 2,
+    y: WORLD / 2,
+    scale: Math.min(LABEL_MAX_SCALE, Math.max(1.2, 1.45)),
+  });
+  history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
+
+  expandSimilarFromOpenLibrary(book).catch((err) => console.warn(err));
 }
 
 function openDetailPanel(book) {
@@ -523,7 +524,7 @@ async function onSearchSubmit(e) {
       setStatus(`No match for “${q}”. Try a different title or spelling.`);
       return;
     }
-    await focusBook(result.book, result.searchedAs);
+    focusBook(result.book, result.searchedAs);
   } catch (err) {
     setStatus(searchErrorMessage(err));
     console.error(err);

@@ -85,27 +85,48 @@ export function docFromSubjectWork(work, subject) {
   };
 }
 
+const CORS_PROXY = "https://api.allorigins.win/raw?url=";
+
+async function olFetchDirect(url, signal) {
+  const res = await fetch(url, {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Open Library HTTP ${res.status}`);
+  return res.json();
+}
+
+async function olFetchViaProxy(url, signal) {
+  const proxyUrl = CORS_PROXY + encodeURIComponent(url);
+  const res = await fetch(proxyUrl, { signal });
+  if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
+  const wrapper = await res.json();
+  if (wrapper.status?.http_code && wrapper.status.http_code >= 400) {
+    throw new Error(`Open Library HTTP ${wrapper.status.http_code}`);
+  }
+  const body = wrapper.contents;
+  return typeof body === "string" ? JSON.parse(body) : body;
+}
+
 async function olFetch(path, params = {}, attempt = 0) {
   const url = new URL(path.startsWith("http") ? path : `${OL}${path}`);
   Object.entries(params).forEach(([k, v]) => {
     if (v != null) url.searchParams.set(k, String(v));
   });
 
+  const timeoutMs = params.limit && params.limit <= 25 ? 10000 : 18000;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 18000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) {
-      throw new Error(`Open Library HTTP ${res.status}`);
+    try {
+      return await olFetchDirect(url.toString(), controller.signal);
+    } catch (directErr) {
+      return await olFetchViaProxy(url.toString(), controller.signal);
     }
-    return await res.json();
   } catch (err) {
-    if (attempt < 2) {
-      await sleep(400 * (attempt + 1));
+    if (attempt < 1) {
+      await sleep(300);
       return olFetch(path, params, attempt + 1);
     }
     throw err;
@@ -145,38 +166,28 @@ async function searchBooksOnce(q, limit) {
   return (data.docs || []).map(docFromSearchHit).filter(Boolean);
 }
 
-/** Try several Open Library query shapes — one failure should not break search. */
+/** User search: one fast request, then optional fallbacks. */
 export async function searchBooks(query, limit = 20) {
   const trimmed = query.trim();
   if (!trimmed) return [];
 
-  const attempts = [
-    trimmed,
-    `${trimmed} language:eng`,
-    `title:${trimmed}`,
-    `title:"${trimmed}"`,
-  ];
-
-  const seen = new Set();
-  const merged = [];
-
-  for (const q of attempts) {
-    try {
-      const batch = await searchBooksOnce(q, limit);
-      for (const book of batch) {
-        if (!seen.has(book.id)) {
-          seen.add(book.id);
-          merged.push(book);
-        }
-      }
-      if (merged.length >= 3) return merged.slice(0, limit);
-    } catch (err) {
-      console.warn("Open Library search attempt failed:", q, err);
-    }
-    await sleep(60);
+  try {
+    const primary = await searchBooksOnce(trimmed, limit);
+    if (primary.length) return primary;
+  } catch (err) {
+    console.warn("Primary search failed:", err);
   }
 
-  return merged.slice(0, limit);
+  for (const q of [`${trimmed} language:eng`, `title:${trimmed}`]) {
+    try {
+      const batch = await searchBooksOnce(q, limit);
+      if (batch.length) return batch;
+    } catch (err) {
+      console.warn("Search fallback failed:", q, err);
+    }
+  }
+
+  return [];
 }
 
 function normalizeTitle(s) {

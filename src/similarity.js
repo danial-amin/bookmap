@@ -136,15 +136,16 @@ export function refreshBookGraph(books) {
 }
 
 export function neighborsForBook(book, books, k = 48) {
-  attachVectors(books);
+  const pool = books.some((b) => b.id === book.id) ? books : [book, ...books];
+  attachVectors(pool);
   const scores = [];
-  for (const other of books) {
+  for (const other of pool) {
     if (other.id === book.id) continue;
     const sim = cosine(book._vec, other._vec);
     if (sim > 0) scores.push({ id: other.id, similarity: Math.round(sim * 10000) / 10000 });
   }
   scores.sort((a, b) => b.similarity - a.similarity);
-  for (const b of books) delete b._vec;
+  for (const b of pool) delete b._vec;
   return scores.slice(0, k);
 }
 
