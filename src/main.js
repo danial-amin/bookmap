@@ -369,29 +369,34 @@ async function expandSimilarFromOpenLibrary(book) {
 }
 
 async function focusBook(book, searchedAs = null) {
-  state.lastSearchQuery = searchedAs || book.title;
-  state.centerId = book.id;
-  state.mode = "search";
-  state.selectedId = book.id;
-  state.radialNeighbors = [];
+  try {
+    state.lastSearchQuery = searchedAs || book.title;
+    state.centerId = book.id;
+    state.mode = "search";
+    state.selectedId = book.id;
+    state.radialNeighbors = [];
 
-  const quick = neighborsForBook(book, state.books);
-  applyRadialNeighbors(book, quick);
+    const quick = neighborsForBook(book, state.books);
+    applyRadialNeighbors(book, quick);
 
-  els.exploreBtn.classList.remove("hidden");
-  openDetailPanel(book);
-  ensureDescription(book);
+    els.exploreBtn.classList.remove("hidden");
+    openDetailPanel(book);
+    ensureDescription(book);
 
-  els.input.value = state.lastSearchQuery;
+    els.input.value = state.lastSearchQuery;
 
-  animateCamera({
-    x: WORLD / 2,
-    y: WORLD / 2,
-    scale: Math.min(LABEL_MAX_SCALE, Math.max(0.9, 1.15)),
-  });
-  history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
+    animateCamera({
+      x: WORLD / 2,
+      y: WORLD / 2,
+      scale: Math.min(LABEL_MAX_SCALE, Math.max(0.9, 1.15)),
+    });
+    history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
 
-  expandSimilarFromOpenLibrary(book);
+    expandSimilarFromOpenLibrary(book).catch((err) => console.warn(err));
+  } catch (err) {
+    console.error(err);
+    throw err;
+  }
 }
 
 function openDetailPanel(book) {
@@ -453,7 +458,15 @@ async function resolveBook(query) {
   const trimmed = query.trim();
   setStatus(`Searching Open Library for “${trimmed}”…`);
 
-  const hits = await searchBooks(trimmed, 20);
+  let hits = [];
+  try {
+    hits = await searchBooks(trimmed, 24);
+  } catch (err) {
+    const local = findLocalExactBook(trimmed);
+    if (local) return { book: local, searchedAs: trimmed };
+    throw err;
+  }
+
   let book = hits.length ? pickBestSearchMatch(trimmed, hits) : null;
 
   if (!book) {
@@ -473,6 +486,20 @@ async function resolveBook(query) {
   return { book, searchedAs: trimmed };
 }
 
+function searchErrorMessage(err) {
+  if (err?.name === "AbortError") {
+    return "Open Library timed out. Try again or check your connection.";
+  }
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return "You appear to be offline.";
+  }
+  const msg = err?.message || "";
+  if (msg.includes("429")) {
+    return "Open Library is busy. Wait a moment and try again.";
+  }
+  return "Search failed. Check your connection, disable ad blockers for openlibrary.org, and retry.";
+}
+
 async function onSearchSubmit(e) {
   e.preventDefault();
   if (!state.ready) return;
@@ -486,9 +513,9 @@ async function onSearchSubmit(e) {
       setStatus(`No match for “${q}”. Try a different title or spelling.`);
       return;
     }
-    focusBook(result.book, result.searchedAs);
+    await focusBook(result.book, result.searchedAs);
   } catch (err) {
-    setStatus("Search failed. Check your connection and try again.");
+    setStatus(searchErrorMessage(err));
     console.error(err);
   } finally {
     els.submitBtn.disabled = false;

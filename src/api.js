@@ -35,9 +35,9 @@ function isUsableTitle(title) {
 
 export function docFromSearchHit(doc) {
   const workKey = normalizeWorkKey(doc.key);
-  if (!workKey || !isUsableTitle(doc.title) || !doc.author_name?.[0]) return null;
+  if (!workKey || !isUsableTitle(doc.title)) return null;
 
-  const author = doc.author_name[0];
+  const author = doc.author_name?.[0] || "Unknown";
   const subjects = (doc.subject || []).filter((s) => typeof s === "string").slice(0, 14);
   const sentences = doc.first_sentence;
   const snippet = Array.isArray(sentences)
@@ -92,7 +92,7 @@ async function olFetch(path, params = {}, attempt = 0) {
   });
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000);
+  const timer = setTimeout(() => controller.abort(), 18000);
 
   try {
     const res = await fetch(url, {
@@ -133,15 +133,50 @@ export async function fetchSubjectWorks(subject, offset = 0, limit = 50) {
     .filter(Boolean);
 }
 
-export async function searchBooks(query, limit = 12) {
+const SEARCH_FIELDS =
+  "key,title,author_name,first_publish_year,cover_i,subject,first_sentence,ratings_count";
+
+async function searchBooksOnce(q, limit) {
   const data = await olFetch("/search.json", {
-    q: query,
-    language: "eng",
+    q,
     limit,
-    fields:
-      "key,title,author_name,first_publish_year,cover_i,subject,first_sentence,ratings_count",
+    fields: SEARCH_FIELDS,
   });
   return (data.docs || []).map(docFromSearchHit).filter(Boolean);
+}
+
+/** Try several Open Library query shapes — one failure should not break search. */
+export async function searchBooks(query, limit = 20) {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const attempts = [
+    trimmed,
+    `${trimmed} language:eng`,
+    `title:${trimmed}`,
+    `title:"${trimmed}"`,
+  ];
+
+  const seen = new Set();
+  const merged = [];
+
+  for (const q of attempts) {
+    try {
+      const batch = await searchBooksOnce(q, limit);
+      for (const book of batch) {
+        if (!seen.has(book.id)) {
+          seen.add(book.id);
+          merged.push(book);
+        }
+      }
+      if (merged.length >= 3) return merged.slice(0, limit);
+    } catch (err) {
+      console.warn("Open Library search attempt failed:", q, err);
+    }
+    await sleep(60);
+  }
+
+  return merged.slice(0, limit);
 }
 
 function normalizeTitle(s) {
@@ -204,19 +239,23 @@ export async function fetchRelatedBooks(book, limit = 50) {
 
   if (book.author && book.author !== "Unknown") {
     try {
-      addHits(await searchBooks(`author_name:"${book.author}"`, 35));
+      addHits(await searchBooksOnce(`author_name:"${book.author}"`, 35));
     } catch {
-      /* skip */
+      try {
+        addHits(await searchBooksOnce(book.author, 25));
+      } catch {
+        /* skip */
+      }
     }
     await sleep(80);
   }
 
-  for (const raw of (book.subjects || []).slice(0, 4)) {
+  for (const raw of (book.subjects || []).slice(0, 3)) {
     if (out.length >= limit) break;
     const subject = raw.split("/")[0].trim().slice(0, 48);
     if (subject.length < 4) continue;
     try {
-      addHits(await searchBooks(`subject:"${subject}"`, 30));
+      addHits(await searchBooksOnce(`subject:"${subject}"`, 25));
     } catch {
       /* skip */
     }
