@@ -15,8 +15,8 @@
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap"
       rel="stylesheet"
     />
-    <script type="module" crossorigin src="./assets/index-BeZzOz3G.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-PY_q3G1u.css">
+    <script type="module" crossorigin src="./assets/index-Anbc-b3l.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BHlkC-lj.css">
   </head>
   <body>
     <div id="app" class="app">
@@ -46,7 +46,7 @@
         <p id="status" class="status" aria-live="polite"></p>
       </header>
 
-      <main class="map-main">
+      <main class="map-main" id="map-main">
         <div id="map-wrap" class="map-wrap">
           <canvas id="map-canvas" aria-hidden="true"></canvas>
           <div id="map-labels" class="map-labels"></div>
@@ -63,17 +63,32 @@
           </p>
         </div>
 
-        <aside id="detail" class="detail hidden" aria-labelledby="detail-title">
-          <button type="button" id="detail-close" class="detail-close" aria-label="Close">
-            ×
-          </button>
-          <p class="detail-eyebrow">Selected book</p>
-          <h2 id="detail-title" class="detail-title font-serif"></h2>
-          <p id="detail-author" class="detail-author"></p>
-          <p id="detail-blurb" class="detail-blurb"></p>
-          <a id="detail-link" class="detail-link" href="#" target="_blank" rel="noopener">
-            View on Open Library →
-          </a>
+        <div id="detail-backdrop" class="detail-backdrop hidden" aria-hidden="true"></div>
+        <aside id="detail" class="detail-panel hidden" aria-labelledby="detail-title">
+          <div class="detail-panel-header">
+            <p class="detail-eyebrow">Selected book</p>
+            <button type="button" id="detail-close" class="detail-close" aria-label="Close">
+              ×
+            </button>
+          </div>
+          <div class="detail-panel-scroll">
+            <div class="detail-hero">
+              <img id="detail-cover" class="detail-cover hidden" alt="" width="96" height="144" />
+              <div class="detail-hero-text">
+                <p id="detail-query-note" class="detail-query-note hidden"></p>
+                <h2 id="detail-title" class="detail-title font-serif"></h2>
+                <p id="detail-author" class="detail-author"></p>
+              </div>
+            </div>
+            <p id="detail-blurb" class="detail-blurb"></p>
+            <section class="detail-similar-section">
+              <h3 class="detail-similar-heading">Similar books</h3>
+              <ul id="detail-similar" class="detail-similar-list"></ul>
+            </section>
+            <a id="detail-link" class="detail-link btn-outline" href="#" target="_blank" rel="noopener">
+              View on Open Library
+            </a>
+          </div>
         </aside>
       </main>
 

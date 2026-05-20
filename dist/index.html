@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bookmap — find similar books</title>
+    <meta
+      name="description"
+      content="Type a book and explore similar titles on an interactive map. Live data from Open Library."
+    />
+    <meta name="theme-color" content="#f6f3ed" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap"
+      rel="stylesheet"
+    />
+    <script type="module" crossorigin src="./assets/index-Anbc-b3l.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BHlkC-lj.css">
+  </head>
+  <body>
+    <div id="app" class="app">
+      <header class="shell-header">
+        <div class="shell-header-inner">
+          <div class="brand-block">
+            <a href="./" class="brand font-serif" id="brand-home">Bookmap</a>
+            <p class="eyebrow">The tourist map of books</p>
+          </div>
+          <button type="button" id="explore-btn" class="btn-ghost hidden">
+            Full map
+          </button>
+        </div>
+        <div class="search-row">
+          <form id="search-form" class="search-form" role="search" autocomplete="off">
+            <label class="sr-only" for="search-input">Book title</label>
+            <input
+              id="search-input"
+              type="search"
+              class="search-input"
+              placeholder="Type a book title…"
+              spellcheck="false"
+            />
+            <button type="submit" class="btn-primary">Explore</button>
+          </form>
+        </div>
+        <p id="status" class="status" aria-live="polite"></p>
+      </header>
+
+      <main class="map-main" id="map-main">
+        <div id="map-wrap" class="map-wrap">
+          <canvas id="map-canvas" aria-hidden="true"></canvas>
+          <div id="map-labels" class="map-labels"></div>
+          <div id="loader" class="loader" aria-busy="true">
+            <p class="loader-title font-serif">Loading the map</p>
+            <p id="loader-detail" class="loader-detail">Connecting to Open Library…</p>
+            <button type="button" id="retry-btn" class="btn-primary loader-retry hidden">
+              Retry
+            </button>
+          </div>
+          <p class="map-hint">
+            Drag to pan · scroll to zoom ·
+            <a href="https://openlibrary.org/" target="_blank" rel="noopener">Open Library</a>
+          </p>
+        </div>
+
+        <div id="detail-backdrop" class="detail-backdrop hidden" aria-hidden="true"></div>
+        <aside id="detail" class="detail-panel hidden" aria-labelledby="detail-title">
+          <div class="detail-panel-header">
+            <p class="detail-eyebrow">Selected book</p>
+            <button type="button" id="detail-close" class="detail-close" aria-label="Close">
+              ×
+            </button>
+          </div>
+          <div class="detail-panel-scroll">
+            <div class="detail-hero">
+              <img id="detail-cover" class="detail-cover hidden" alt="" width="96" height="144" />
+              <div class="detail-hero-text">
+                <p id="detail-query-note" class="detail-query-note hidden"></p>
+                <h2 id="detail-title" class="detail-title font-serif"></h2>
+                <p id="detail-author" class="detail-author"></p>
+              </div>
+            </div>
+            <p id="detail-blurb" class="detail-blurb"></p>
+            <section class="detail-similar-section">
+              <h3 class="detail-similar-heading">Similar books</h3>
+              <ul id="detail-similar" class="detail-similar-list"></ul>
+            </section>
+            <a id="detail-link" class="detail-link btn-outline" href="#" target="_blank" rel="noopener">
+              View on Open Library
+            </a>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="site-footer">
+        <span>Bookmap · live catalog via Open Library</span>
+      </footer>
+    </div>
+  </body>
+</html>
