@@ -14,6 +14,9 @@ import { refreshBookGraph, neighborsForBook, rankSimilarBooks } from "./similari
 const WORLD = 1000;
 const LABEL_MIN_SCALE = 0.35;
 const LABEL_MAX_SCALE = 2.2;
+/** Search-mode ring layout: closest / farthest neighbor distance (world units). */
+const RING_RADIUS_MIN = 42;
+const RING_RADIUS_MAX = 175;
 
 const state = {
   books: [],
@@ -147,10 +150,17 @@ function layoutForMode(book) {
   const items = [{ id: book.id, x: cx, y: cy, book }];
 
   const neighbors = state.radialNeighbors.length ? state.radialNeighbors : book.neighbors || [];
+  const sims = neighbors.map((n) => n.similarity ?? 0);
+  const maxSim = Math.max(...sims, 0.001);
+  const minSim = Math.min(...sims);
+
   for (const n of neighbors) {
     const other = state.byId.get(n.id);
     if (!other) continue;
-    const radius = (1 - n.similarity) * 380 + 55;
+    const span = maxSim - minSim || 1;
+    const norm = (n.similarity - minSim) / span;
+    const closeness = Math.pow(Math.min(1, Math.max(0, norm)), 0.75);
+    const radius = RING_RADIUS_MIN + (1 - closeness) * (RING_RADIUS_MAX - RING_RADIUS_MIN);
     const angle = neighborAngle(n.id);
     items.push({
       id: other.id,
@@ -201,9 +211,9 @@ function drawBackground() {
 
   if (state.mode === "search" && state.centerId) {
     const center = worldToScreen(WORLD / 2, WORLD / 2);
-    for (let r = 80; r <= 360; r += 70) {
+    for (let r = 50; r <= RING_RADIUS_MAX + 20; r += 45) {
       ctx.beginPath();
-      ctx.arc(center.x, center.y, r * state.camera.scale * 0.45, 0, Math.PI * 2);
+      ctx.arc(center.x, center.y, r * state.camera.scale, 0, Math.PI * 2);
       ctx.strokeStyle = "rgba(154, 123, 92, 0.12)";
       ctx.lineWidth = 1;
       ctx.stroke();
@@ -388,7 +398,7 @@ async function focusBook(book, searchedAs = null) {
     animateCamera({
       x: WORLD / 2,
       y: WORLD / 2,
-      scale: Math.min(LABEL_MAX_SCALE, Math.max(0.9, 1.15)),
+      scale: Math.min(LABEL_MAX_SCALE, Math.max(1.2, 1.45)),
     });
     history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
 
