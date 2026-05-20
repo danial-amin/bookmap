@@ -4,10 +4,12 @@ import {
   clearCatalogCache,
   enrichBooks,
   searchBooks,
+  pickBestSearchMatch,
+  fetchRelatedBooks,
   fetchWorkDescription,
   saveCatalogCache,
 } from "./api.js";
-import { refreshBookGraph, neighborsForBook } from "./similarity.js";
+import { refreshBookGraph, neighborsForBook, rankSimilarBooks } from "./similarity.js";
 
 const WORLD = 1000;
 const LABEL_MIN_SCALE = 0.35;
@@ -25,6 +27,8 @@ const state = {
   dragLast: null,
   selectedId: null,
   animId: null,
+  lastSearchQuery: null,
+  radialNeighbors: [],
 };
 
 const els = {
@@ -34,10 +38,15 @@ const els = {
   form: document.getElementById("search-form"),
   input: document.getElementById("search-input"),
   status: document.getElementById("status"),
+  mapMain: document.getElementById("map-main"),
   detail: document.getElementById("detail"),
+  detailBackdrop: document.getElementById("detail-backdrop"),
   detailTitle: document.getElementById("detail-title"),
   detailAuthor: document.getElementById("detail-author"),
   detailBlurb: document.getElementById("detail-blurb"),
+  detailCover: document.getElementById("detail-cover"),
+  detailQueryNote: document.getElementById("detail-query-note"),
+  detailSimilar: document.getElementById("detail-similar"),
   detailLink: document.getElementById("detail-link"),
   detailClose: document.getElementById("detail-close"),
   loader: document.getElementById("loader"),
@@ -79,33 +88,10 @@ function normalize(s) {
     .trim();
 }
 
-function findLocalBook(query) {
+function findLocalExactBook(query) {
   const q = normalize(query);
   if (!q) return null;
-
-  const exact = state.books.find((b) => normalize(b.title) === q);
-  if (exact) return exact;
-
-  const contains = state.books.filter((b) => normalize(b.title).includes(q));
-  if (contains.length === 1) return contains[0];
-  if (contains.length > 1) {
-    contains.sort((a, b) => a.title.length - b.title.length);
-    return contains[0];
-  }
-
-  let best = null;
-  let bestScore = 0;
-  for (const book of state.books) {
-    const t = normalize(book.title);
-    const words = q.split(" ");
-    const hits = words.filter((w) => w.length > 2 && t.includes(w)).length;
-    const score = hits / words.length;
-    if (score > bestScore) {
-      bestScore = score;
-      best = book;
-    }
-  }
-  return bestScore >= 0.5 ? best : null;
+  return state.books.find((b) => normalize(b.title) === q) || null;
 }
 
 function placeNewBook(book) {
@@ -160,7 +146,8 @@ function layoutForMode(book) {
   const cy = WORLD / 2;
   const items = [{ id: book.id, x: cx, y: cy, book }];
 
-  for (const n of book.neighbors || []) {
+  const neighbors = state.radialNeighbors.length ? state.radialNeighbors : book.neighbors || [];
+  for (const n of neighbors) {
     const other = state.byId.get(n.id);
     if (!other) continue;
     const radius = (1 - n.similarity) * 380 + 55;
@@ -327,21 +314,75 @@ async function ensureDescription(book) {
   }
 }
 
-function focusBook(book) {
-  if (!book.neighbors?.length) {
-    book.neighbors = neighborsForBook(book, state.books);
+function coverUrl(book) {
+  if (!book.cover_i) return null;
+  return `https://covers.openlibrary.org/b/id/${book.cover_i}-M.jpg`;
+}
+
+function applyRadialNeighbors(book, ranked) {
+  state.radialNeighbors = ranked;
+  book.neighbors = ranked;
+  state.neighborIds = new Set(ranked.map((n) => n.id));
+  renderSimilarList(book, ranked);
+  render();
+}
+
+function renderSimilarList(center, ranked) {
+  els.detailSimilar.innerHTML = "";
+  for (const n of ranked.slice(0, 12)) {
+    const other = state.byId.get(n.id);
+    if (!other) continue;
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.innerHTML = `${other.title}<span class="sim-meta">${other.author}${n.similarity ? ` · ${Math.round(n.similarity * 100)}% match` : ""}</span>`;
+    btn.addEventListener("click", () => focusBook(other, other.title));
+    li.appendChild(btn);
+    els.detailSimilar.appendChild(li);
   }
+}
+
+async function expandSimilarFromOpenLibrary(book) {
+  setStatus(`Finding similar books for “${book.title}”…`);
+  try {
+    const related = await fetchRelatedBooks(book, 55);
+    for (const r of related) addBook(r);
+
+    const candidates = related
+      .map((r) => state.byId.get(r.id))
+      .filter(Boolean);
+    const local = state.books.filter((b) => b.id !== book.id);
+    const merged = new Map();
+    for (const b of [...candidates, ...local]) merged.set(b.id, b);
+
+    const ranked = rankSimilarBooks(book, [...merged.values()]);
+    applyRadialNeighbors(book, ranked);
+    setStatus(
+      `${ranked.length} similar books around “${book.title}” — closer on the map means more alike.`
+    );
+  } catch (err) {
+    console.warn(err);
+    const fallback = neighborsForBook(book, state.books);
+    applyRadialNeighbors(book, fallback);
+    setStatus(`Showing ${fallback.length} similar books from the map.`);
+  }
+}
+
+async function focusBook(book, searchedAs = null) {
+  state.lastSearchQuery = searchedAs || book.title;
   state.centerId = book.id;
-  state.neighborIds = new Set((book.neighbors || []).map((n) => n.id));
   state.mode = "search";
   state.selectedId = book.id;
+  state.radialNeighbors = [];
+
+  const quick = neighborsForBook(book, state.books);
+  applyRadialNeighbors(book, quick);
+
   els.exploreBtn.classList.remove("hidden");
-  showDetail(book);
+  openDetailPanel(book);
   ensureDescription(book);
-  setStatus(
-    `Books similar to “${book.title}” — closer titles are more alike.`
-  );
-  els.input.value = book.title;
+
+  els.input.value = state.lastSearchQuery;
 
   animateCamera({
     x: WORLD / 2,
@@ -349,16 +390,37 @@ function focusBook(book) {
     scale: Math.min(LABEL_MAX_SCALE, Math.max(0.9, 1.15)),
   });
   history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
+
+  expandSimilarFromOpenLibrary(book);
 }
 
-function showDetail(book) {
+function openDetailPanel(book) {
   els.detail.classList.remove("hidden");
+  els.detailBackdrop.classList.remove("hidden");
+  els.mapMain.classList.add("panel-open");
+
   els.detailTitle.textContent = book.title;
   els.detailAuthor.textContent = [book.author, book.year].filter(Boolean).join(" · ");
   els.detailBlurb.textContent =
-    book.description ||
-    book.snippet ||
-    "Fetching details from Open Library…";
+    book.description || book.snippet || "Fetching details from Open Library…";
+
+  const q = state.lastSearchQuery;
+  if (q && normalize(q) !== normalize(book.title)) {
+    els.detailQueryNote.classList.remove("hidden");
+    els.detailQueryNote.innerHTML = `You searched for <strong>${q}</strong> — showing the closest Open Library match.`;
+  } else {
+    els.detailQueryNote.classList.add("hidden");
+  }
+
+  const cover = coverUrl(book);
+  if (cover) {
+    els.detailCover.src = cover;
+    els.detailCover.alt = `Cover of ${book.title}`;
+    els.detailCover.classList.remove("hidden");
+  } else {
+    els.detailCover.classList.add("hidden");
+  }
+
   const key = book.open_library_key || "";
   els.detailLink.href = key
     ? `https://openlibrary.org${key}`
@@ -367,6 +429,8 @@ function showDetail(book) {
 
 function hideDetail() {
   els.detail.classList.add("hidden");
+  els.detailBackdrop.classList.add("hidden");
+  els.mapMain.classList.remove("panel-open");
   state.selectedId = null;
 }
 
@@ -374,6 +438,8 @@ function exploreAll() {
   state.mode = "explore";
   state.centerId = null;
   state.neighborIds.clear();
+  state.radialNeighbors = [];
+  state.lastSearchQuery = null;
   hideDetail();
   els.exploreBtn.classList.add("hidden");
   setStatus(
@@ -384,16 +450,19 @@ function exploreAll() {
 }
 
 async function resolveBook(query) {
-  const local = findLocalBook(query);
-  if (local) return local;
+  const trimmed = query.trim();
+  setStatus(`Searching Open Library for “${trimmed}”…`);
 
-  setStatus(`Searching Open Library for “${query.trim()}”…`);
-  const hits = await searchBooks(query, 8);
-  if (!hits.length) return null;
+  const hits = await searchBooks(trimmed, 20);
+  let book = hits.length ? pickBestSearchMatch(trimmed, hits) : null;
 
-  const q = normalize(query);
-  const exact = hits.find((h) => normalize(h.title) === q) || hits[0];
-  const book = addBook(exact);
+  if (!book) {
+    book = findLocalExactBook(trimmed);
+    if (book) return { book, searchedAs: trimmed };
+    return null;
+  }
+
+  book = addBook(book);
   try {
     const { description, subjects } = await fetchWorkDescription(book.open_library_key);
     if (description) book.description = description;
@@ -401,7 +470,7 @@ async function resolveBook(query) {
   } catch {
     /* ignore */
   }
-  return book;
+  return { book, searchedAs: trimmed };
 }
 
 async function onSearchSubmit(e) {
@@ -412,12 +481,12 @@ async function onSearchSubmit(e) {
 
   els.submitBtn.disabled = true;
   try {
-    const book = await resolveBook(q);
-    if (!book) {
+    const result = await resolveBook(q);
+    if (!result) {
       setStatus(`No match for “${q}”. Try a different title or spelling.`);
       return;
     }
-    focusBook(book);
+    focusBook(result.book, result.searchedAs);
   } catch (err) {
     setStatus("Search failed. Check your connection and try again.");
     console.error(err);
@@ -438,7 +507,10 @@ function onWheel(e) {
 }
 
 function onPointerDown(e) {
-  if (!state.ready || e.target.closest(".book-label, .shell-header, .detail, .site-footer"))
+  if (
+    !state.ready ||
+    e.target.closest(".book-label, .shell-header, .detail-panel, .detail-backdrop, .site-footer")
+  )
     return;
   state.dragging = true;
   state.dragLast = { x: e.clientX, y: e.clientY };
@@ -488,7 +560,7 @@ async function loadLiveData({ forceRefresh = false } = {}) {
 
   try {
     books = await loadLiveCatalog({
-      target: 180,
+      target: 400,
       onProgress: setLoaderDetail,
     });
   } catch (liveErr) {
@@ -528,6 +600,7 @@ async function loadLiveData({ forceRefresh = false } = {}) {
 function initEvents() {
   els.form.addEventListener("submit", onSearchSubmit);
   els.detailClose.addEventListener("click", hideDetail);
+  els.detailBackdrop.addEventListener("click", hideDetail);
   els.exploreBtn.addEventListener("click", exploreAll);
   els.brandHome.addEventListener("click", (e) => {
     e.preventDefault();
@@ -560,7 +633,7 @@ async function boot() {
     const hash = location.hash.slice(1);
     if (hash) {
       const book = state.byId.get(decodeURIComponent(hash));
-      if (book) focusBook(book);
+      if (book) focusBook(book, book.title);
     }
   } catch (err) {
     console.error(err);

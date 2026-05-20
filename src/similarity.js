@@ -147,3 +147,18 @@ export function neighborsForBook(book, books, k = 48) {
   for (const b of books) delete b._vec;
   return scores.slice(0, k);
 }
+
+/** Rank candidate books by text similarity to a center book. */
+export function rankSimilarBooks(center, candidates, k = 48) {
+  attachVectors([center, ...candidates]);
+  const scores = [];
+  for (const other of candidates) {
+    if (other.id === center.id) continue;
+    const sim = cosine(center._vec, other._vec);
+    scores.push({ id: other.id, similarity: Math.round(sim * 10000) / 10000, book: other });
+  }
+  delete center._vec;
+  for (const b of candidates) delete b._vec;
+  scores.sort((a, b) => b.similarity - a.similarity);
+  return scores.slice(0, k);
+}

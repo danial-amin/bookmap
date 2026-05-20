@@ -144,6 +144,96 @@ export async function searchBooks(query, limit = 12) {
   return (data.docs || []).map(docFromSearchHit).filter(Boolean);
 }
 
+function normalizeTitle(s) {
+  return s
+    .toLowerCase()
+    .replace(/['']/g, "'")
+    .replace(/[^a-z0-9\s']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleMatchScore(query, title) {
+  if (title === query) return 100;
+  if (title.startsWith(query) || query.startsWith(title)) {
+    return 85 - Math.min(20, Math.abs(title.length - query.length));
+  }
+  if (title.includes(query)) return 70 - Math.min(30, title.length - query.length);
+  const words = query.split(" ").filter((w) => w.length > 2);
+  if (!words.length) return 0;
+  const hits = words.filter((w) => title.includes(w)).length;
+  return (hits / words.length) * 55;
+}
+
+/** Pick the hit that best matches what the user typed (not merely the first API result). */
+export function pickBestSearchMatch(query, hits) {
+  if (!hits?.length) return null;
+  const nq = normalizeTitle(query.trim());
+  const exact = hits.filter((h) => normalizeTitle(h.title) === nq);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) {
+    exact.sort((a, b) => a.title.length - b.title.length);
+    return exact[0];
+  }
+
+  let best = null;
+  let bestScore = -1;
+  for (const h of hits) {
+    const score = titleMatchScore(nq, normalizeTitle(h.title));
+    if (score > bestScore) {
+      bestScore = score;
+      best = h;
+    }
+  }
+  return bestScore >= 28 ? best : hits[0];
+}
+
+/** Pull more related works from Open Library (author + subjects), not just the local map set. */
+export async function fetchRelatedBooks(book, limit = 50) {
+  const seen = new Set([book.id]);
+  const out = [];
+
+  const addHits = (hits) => {
+    for (const h of hits) {
+      if (!seen.has(h.id)) {
+        seen.add(h.id);
+        out.push(h);
+      }
+    }
+  };
+
+  if (book.author && book.author !== "Unknown") {
+    try {
+      addHits(await searchBooks(`author_name:"${book.author}"`, 35));
+    } catch {
+      /* skip */
+    }
+    await sleep(80);
+  }
+
+  for (const raw of (book.subjects || []).slice(0, 4)) {
+    if (out.length >= limit) break;
+    const subject = raw.split("/")[0].trim().slice(0, 48);
+    if (subject.length < 4) continue;
+    try {
+      addHits(await searchBooks(`subject:"${subject}"`, 30));
+    } catch {
+      /* skip */
+    }
+    await sleep(80);
+  }
+
+  if (out.length < 12) {
+    try {
+      addHits(await searchBooks(book.title, 20));
+    } catch {
+      /* skip */
+    }
+  }
+
+  return out.slice(0, limit);
+}
+
 export async function fetchWorkDescription(workKey) {
   const key = normalizeWorkKey(workKey);
   if (!key) return { description: "", subjects: [] };
@@ -156,7 +246,7 @@ export async function fetchWorkDescription(workKey) {
   return { description: (description || "").slice(0, 1200), subjects };
 }
 
-const CACHE_KEY = "bookmap-catalog-v3";
+const CACHE_KEY = "bookmap-catalog-v4";
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 export function clearCatalogCache() {
@@ -225,7 +315,7 @@ function stripForCache(b) {
 /**
  * Load a live catalog from Open Library (reading-list popularity + subject shelves).
  */
-export async function loadLiveCatalog({ target = 220, onProgress } = {}) {
+export async function loadLiveCatalog({ target = 400, onProgress } = {}) {
   const cached = loadCatalogCache();
   if (cached?.length >= 50) {
     onProgress?.(`Loaded ${cached.length} books (cached).`);
@@ -240,7 +330,7 @@ export async function loadLiveCatalog({ target = 220, onProgress } = {}) {
   };
 
   onProgress?.("Fetching popular books from Open Library…");
-  for (let offset = 0; offset < 500 && byId.size < target; offset += 100) {
+  for (let offset = 0; offset < 900 && byId.size < target; offset += 100) {
     try {
       const batch = await searchReadinglog(offset, 100);
       add(batch);
@@ -258,7 +348,7 @@ export async function loadLiveCatalog({ target = 220, onProgress } = {}) {
   for (const subject of SUBJECT_SHELVES) {
     if (byId.size >= target) break;
     try {
-      const batch = await fetchSubjectWorks(subject, 0, Math.min(perShelf, 60));
+      const batch = await fetchSubjectWorks(subject, 0, Math.min(perShelf, 80));
       add(batch);
       onProgress?.(`Subject “${subject}”: ${byId.size} books…`);
     } catch (err) {
