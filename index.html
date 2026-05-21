@@ -15,8 +15,9 @@
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap"
       rel="stylesheet"
     />
-    <script type="module" crossorigin src="./assets/index-C9IuE-sl.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-BHlkC-lj.css">
+    <script type="module" crossorigin src="./assets/main-BagxTCtK.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/supabase-BK0AE1iD.js">
+    <link rel="stylesheet" crossorigin href="./assets/supabase-BZdRJ8u9.css">
   </head>
   <body>
     <div id="app" class="app">
@@ -26,9 +27,17 @@
             <a href="./" class="brand font-serif" id="brand-home">Bookmap</a>
             <p class="eyebrow">The tourist map of books</p>
           </div>
-          <button type="button" id="explore-btn" class="btn-ghost hidden">
-            Full map
-          </button>
+          <nav class="header-nav" aria-label="Account">
+            <button type="button" id="library-btn" class="btn-ghost signed-only hidden">
+              My books
+            </button>
+            <span id="user-label" class="user-label hidden"></span>
+            <button type="button" id="sign-in-btn" class="btn-ghost">Sign in</button>
+            <button type="button" id="sign-out-btn" class="btn-ghost hidden">Sign out</button>
+            <button type="button" id="explore-btn" class="btn-ghost hidden">
+              Full map
+            </button>
+          </nav>
         </div>
         <div class="search-row">
           <form id="search-form" class="search-form" role="search" autocomplete="off">
@@ -43,10 +52,40 @@
             <button type="submit" class="btn-primary">Explore</button>
           </form>
         </div>
+        <div id="discovery-row" class="discovery-row signed-only hidden">
+          <span class="discovery-label">When you search</span>
+          <div class="discovery-chips" role="group" aria-label="Discovery mode">
+            <button type="button" class="discovery-chip active" data-discovery="similar">
+              Find similar
+            </button>
+            <button type="button" class="discovery-chip" data-discovery="new">
+              Something new
+            </button>
+          </div>
+          <button type="button" id="from-reads-btn" class="btn-ghost">From my reads</button>
+        </div>
         <p id="status" class="status" aria-live="polite"></p>
       </header>
 
       <main class="map-main" id="map-main">
+        <aside id="library-panel" class="library-panel hidden" aria-labelledby="library-heading">
+          <div class="library-panel-header">
+            <h2 id="library-heading" class="library-heading font-serif">My books</h2>
+            <button type="button" id="library-close" class="detail-close" aria-label="Close library">
+              ×
+            </button>
+          </div>
+          <div class="library-tabs" role="tablist">
+            <button type="button" class="library-tab active" data-tab="read">Read</button>
+            <button type="button" class="library-tab" data-tab="reading">Reading</button>
+            <button type="button" class="library-tab" data-tab="want">Want to read</button>
+          </div>
+          <ul id="library-list" class="library-list"></ul>
+          <p id="library-empty" class="library-empty hidden">
+            Add books from the detail panel when you explore the map.
+          </p>
+        </aside>
+
         <div id="map-wrap" class="map-wrap">
           <canvas id="map-canvas" aria-hidden="true"></canvas>
           <div id="map-labels" class="map-labels"></div>
@@ -81,8 +120,26 @@
               </div>
             </div>
             <p id="detail-blurb" class="detail-blurb"></p>
+            <div id="library-actions" class="library-actions hidden">
+              <p class="library-actions-label">Your list</p>
+              <div class="library-action-btns">
+                <button type="button" class="btn-outline library-status-btn" data-status="read">
+                  Mark read
+                </button>
+                <button type="button" class="btn-outline library-status-btn" data-status="reading">
+                  Reading
+                </button>
+                <button type="button" class="btn-outline library-status-btn" data-status="want">
+                  Want to read
+                </button>
+              </div>
+              <button type="button" id="remove-library-btn" class="btn-ghost library-remove hidden">
+                Remove from list
+              </button>
+              <p id="library-action-msg" class="library-action-msg" aria-live="polite"></p>
+            </div>
             <section class="detail-similar-section">
-              <h3 class="detail-similar-heading">Similar books</h3>
+              <h3 id="detail-similar-heading" class="detail-similar-heading">Similar books</h3>
               <ul id="detail-similar" class="detail-similar-list"></ul>
             </section>
             <a id="detail-link" class="detail-link btn-outline" href="#" target="_blank" rel="noopener">
@@ -96,5 +153,36 @@
         <span>Bookmap · live catalog via Open Library</span>
       </footer>
     </div>
+
+    <div id="auth-modal" class="auth-modal hidden" role="dialog" aria-labelledby="auth-modal-title">
+      <div class="auth-backdrop" data-auth-close></div>
+      <div class="auth-card">
+        <button type="button" class="detail-close auth-close" data-auth-close aria-label="Close">
+          ×
+        </button>
+        <h2 id="auth-modal-title" class="auth-title font-serif">Sign in to Bookmap</h2>
+        <p class="auth-subtitle">Save books you’ve read and get personalized suggestions.</p>
+        <form id="auth-form" class="auth-form">
+          <label class="sr-only" for="auth-email">Email</label>
+          <input id="auth-email" type="email" class="search-input" placeholder="Email" required autocomplete="email" />
+          <label class="sr-only" for="auth-password">Password</label>
+          <input
+            id="auth-password"
+            type="password"
+            class="search-input"
+            placeholder="Password"
+            required
+            minlength="6"
+            autocomplete="current-password"
+          />
+          <button type="submit" id="auth-submit" class="btn-primary">Sign in</button>
+        </form>
+        <p id="auth-message" class="auth-message" aria-live="polite"></p>
+        <button type="button" id="auth-mode-btn" class="auth-mode-link">
+          New here? Create an account
+        </button>
+      </div>
+    </div>
+
   </body>
 </html>
