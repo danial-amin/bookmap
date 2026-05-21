@@ -10,6 +10,25 @@ import {
   saveCatalogCache,
 } from "./api.js";
 import { refreshBookGraph, neighborsForBook, rankSimilarBooks } from "./similarity.js";
+import {
+  bindAuthElements,
+  initAuth,
+  onAuthChange,
+  getUser,
+  openAuthModal,
+  requireAuthMessage,
+} from "./auth.js";
+import {
+  loadLibrary,
+  getLibraryBooks,
+  getReadBooks,
+  isInLibrary,
+  addBookToLibrary,
+  removeFromLibrary,
+  setBookStatus,
+  pickRandomReadBook,
+  rowToBook,
+} from "./library.js";
 
 const WORLD = 1000;
 const LABEL_MIN_SCALE = 0.35;
@@ -32,6 +51,8 @@ const state = {
   animId: null,
   lastSearchQuery: null,
   radialNeighbors: [],
+  discoveryMode: "similar",
+  libraryTab: "read",
 };
 
 const els = {
@@ -58,6 +79,19 @@ const els = {
   brandHome: document.getElementById("brand-home"),
   submitBtn: document.querySelector(".btn-primary"),
   retryBtn: document.getElementById("retry-btn"),
+  discoveryRow: document.getElementById("discovery-row"),
+  discoveryChips: document.querySelectorAll("[data-discovery]"),
+  fromReadsBtn: document.getElementById("from-reads-btn"),
+  libraryBtn: document.getElementById("library-btn"),
+  libraryPanel: document.getElementById("library-panel"),
+  libraryClose: document.getElementById("library-close"),
+  libraryList: document.getElementById("library-list"),
+  libraryEmpty: document.getElementById("library-empty"),
+  libraryTabs: document.querySelectorAll(".library-tab"),
+  libraryActions: document.getElementById("library-actions"),
+  libraryActionMsg: document.getElementById("library-action-msg"),
+  removeLibraryBtn: document.getElementById("remove-library-btn"),
+  detailSimilarHeading: document.getElementById("detail-similar-heading"),
 };
 
 const ctx = els.canvas.getContext("2d");
@@ -329,11 +363,19 @@ function coverUrl(book) {
   return `https://covers.openlibrary.org/b/id/${book.cover_i}-M.jpg`;
 }
 
+function filterRankedForDiscovery(ranked) {
+  if (!getUser() || state.discoveryMode !== "new") return ranked;
+  const readIds = new Set(getReadBooks().map((b) => b.bookmap_id));
+  const filtered = ranked.filter((n) => !readIds.has(n.id));
+  return filtered.length ? filtered : ranked;
+}
+
 function applyRadialNeighbors(book, ranked) {
-  state.radialNeighbors = ranked;
-  book.neighbors = ranked;
-  state.neighborIds = new Set(ranked.map((n) => n.id));
-  renderSimilarList(book, ranked);
+  const filtered = filterRankedForDiscovery(ranked);
+  state.radialNeighbors = filtered;
+  book.neighbors = filtered;
+  state.neighborIds = new Set(filtered.map((n) => n.id));
+  renderSimilarList(book, filtered);
   render();
 }
 
@@ -367,8 +409,13 @@ async function expandSimilarFromOpenLibrary(book) {
 
     const ranked = rankSimilarBooks(book, [...merged.values()]);
     applyRadialNeighbors(book, ranked);
+    const shown = state.radialNeighbors.length;
+    const newHint =
+      getUser() && state.discoveryMode === "new"
+        ? " (excluding books you’ve already read)"
+        : "";
     setStatus(
-      `${ranked.length} similar books around “${book.title}” — closer on the map means more alike.`
+      `${shown} books around “${book.title}”${newHint} — closer on the map means more alike.`
     );
   } catch (err) {
     console.warn(err);
@@ -441,6 +488,113 @@ function openDetailPanel(book) {
   els.detailLink.href = key
     ? `https://openlibrary.org${key}`
     : `https://openlibrary.org/search?q=${encodeURIComponent(book.title)}`;
+
+  updateDetailLibraryActions(book);
+  updateSimilarHeading();
+}
+
+function updateSimilarHeading() {
+  if (!els.detailSimilarHeading) return;
+  const newMode = getUser() && state.discoveryMode === "new";
+  els.detailSimilarHeading.textContent = newMode
+    ? "New picks for you"
+    : "Similar books";
+}
+
+function updateDetailLibraryActions(book) {
+  const signedIn = !!getUser();
+  els.libraryActions?.classList.toggle("hidden", !signedIn);
+  if (!signedIn) return;
+
+  const inList = isInLibrary(book.id);
+  els.removeLibraryBtn?.classList.toggle("hidden", !inList);
+  for (const btn of document.querySelectorAll(".library-status-btn")) {
+    btn.classList.toggle("active", false);
+  }
+  if (els.libraryActionMsg) els.libraryActionMsg.textContent = "";
+}
+
+async function handleLibraryAdd(book, status) {
+  if (!getUser()) {
+    openAuthModal();
+    if (els.libraryActionMsg) els.libraryActionMsg.textContent = requireAuthMessage();
+    return;
+  }
+  try {
+    await addBookToLibrary(book, status);
+    if (els.libraryActionMsg) {
+      els.libraryActionMsg.textContent =
+        status === "read"
+          ? "Saved to your read list."
+          : status === "reading"
+            ? "Marked as currently reading."
+            : "Added to want to read.";
+    }
+    updateDetailLibraryActions(book);
+    renderLibraryPanel();
+  } catch (err) {
+    if (els.libraryActionMsg) els.libraryActionMsg.textContent = err.message || "Could not save.";
+  }
+}
+
+function openLibraryPanel() {
+  els.libraryPanel?.classList.remove("hidden");
+  els.mapMain?.classList.add("library-open");
+  renderLibraryPanel();
+}
+
+function closeLibraryPanel() {
+  els.libraryPanel?.classList.add("hidden");
+  els.mapMain?.classList.remove("library-open");
+}
+
+function renderLibraryPanel() {
+  if (!els.libraryList) return;
+  els.libraryList.innerHTML = "";
+
+  const tabRows = getLibraryBooks().filter((b) => b.status === state.libraryTab);
+  const empty = !tabRows.length;
+  els.libraryEmpty?.classList.toggle("hidden", !empty);
+  if (empty) return;
+
+  for (const row of tabRows) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "library-item-btn";
+    btn.innerHTML = `${row.title}<span class="sim-meta">${row.author}${row.year ? ` · ${row.year}` : ""}</span>`;
+    btn.addEventListener("click", () => {
+      const book = rowToBook(row);
+      addBook(book);
+      closeLibraryPanel();
+      focusBook(book, book.title);
+    });
+    li.appendChild(btn);
+    els.libraryList.appendChild(li);
+  }
+}
+
+function refreshSignedInChrome() {
+  const signedIn = !!getUser();
+  document.body.classList.toggle("signed-in", signedIn);
+  els.discoveryRow?.classList.toggle("hidden", !signedIn);
+}
+
+async function onFromReadsClick() {
+  if (!getUser()) {
+    openAuthModal();
+    setStatus(requireAuthMessage());
+    return;
+  }
+  const row = pickRandomReadBook();
+  if (!row) {
+    setStatus("Add at least one book to your read list first.");
+    openLibraryPanel();
+    return;
+  }
+  const book = addBook(row);
+  await focusBook(book, book.title);
+  setStatus(`Exploring from your shelf: “${book.title}”.`);
 }
 
 function hideDetail() {
@@ -547,7 +701,9 @@ function onWheel(e) {
 function onPointerDown(e) {
   if (
     !state.ready ||
-    e.target.closest(".book-label, .shell-header, .detail-panel, .detail-backdrop, .site-footer")
+    e.target.closest(
+      ".book-label, .shell-header, .detail-panel, .detail-backdrop, .library-panel, .auth-modal, .site-footer"
+    )
   )
     return;
   state.dragging = true;
@@ -635,7 +791,81 @@ async function loadLiveData({ forceRefresh = false } = {}) {
     .catch(() => {});
 }
 
+function initLibraryEvents() {
+  els.libraryBtn?.addEventListener("click", () => {
+    if (!getUser()) {
+      openAuthModal();
+      return;
+    }
+    openLibraryPanel();
+  });
+  els.libraryClose?.addEventListener("click", closeLibraryPanel);
+
+  for (const tab of els.libraryTabs) {
+    tab.addEventListener("click", () => {
+      for (const t of els.libraryTabs) t.classList.remove("active");
+      tab.classList.add("active");
+      state.libraryTab = tab.dataset.tab || "read";
+      renderLibraryPanel();
+    });
+  }
+
+  for (const chip of els.discoveryChips) {
+    chip.addEventListener("click", () => {
+      state.discoveryMode = chip.dataset.discovery || "similar";
+      for (const c of els.discoveryChips) {
+        c.classList.toggle("active", c === chip);
+      }
+      updateSimilarHeading();
+      const center = state.centerId ? state.byId.get(state.centerId) : null;
+      if (center?.neighbors?.length) {
+        applyRadialNeighbors(center, center.neighbors);
+      }
+    });
+  }
+
+  els.fromReadsBtn?.addEventListener("click", () => {
+    onFromReadsClick().catch((err) => console.warn(err));
+  });
+
+  for (const btn of document.querySelectorAll(".library-status-btn")) {
+    btn.addEventListener("click", () => {
+      const book = state.selectedId ? state.byId.get(state.selectedId) : null;
+      if (!book) return;
+      handleLibraryAdd(book, btn.dataset.status || "read");
+    });
+  }
+
+  els.removeLibraryBtn?.addEventListener("click", async () => {
+    const book = state.selectedId ? state.byId.get(state.selectedId) : null;
+    if (!book || !getUser()) return;
+    try {
+      await removeFromLibrary(book.id);
+      updateDetailLibraryActions(book);
+      renderLibraryPanel();
+      if (els.libraryActionMsg) els.libraryActionMsg.textContent = "Removed from your list.";
+    } catch (err) {
+      if (els.libraryActionMsg) els.libraryActionMsg.textContent = err.message;
+    }
+  });
+}
+
 function initEvents() {
+  bindAuthElements({
+    modal: "auth-modal",
+    form: "auth-form",
+    email: "auth-email",
+    password: "auth-password",
+    message: "auth-message",
+    modeBtn: "auth-mode-btn",
+    submit: "auth-submit",
+    userLabel: "user-label",
+    signInBtn: "sign-in-btn",
+    signOutBtn: "sign-out-btn",
+  });
+
+  initLibraryEvents();
+
   els.form.addEventListener("submit", onSearchSubmit);
   els.detailClose.addEventListener("click", hideDetail);
   els.detailBackdrop.addEventListener("click", hideDetail);
@@ -666,6 +896,26 @@ function initEvents() {
 async function boot() {
   initEvents();
   resizeCanvas();
+
+  await initAuth();
+  onAuthChange(async (user) => {
+    refreshSignedInChrome();
+    if (user) {
+      try {
+        await loadLibrary();
+        renderLibraryPanel();
+      } catch (err) {
+        console.warn(err);
+      }
+    } else {
+      closeLibraryPanel();
+    }
+  });
+  refreshSignedInChrome();
+  if (getUser()) {
+    loadLibrary().then(() => renderLibraryPanel()).catch(() => {});
+  }
+
   try {
     await loadLiveData();
     const hash = location.hash.slice(1);
