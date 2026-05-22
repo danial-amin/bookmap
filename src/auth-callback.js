@@ -4,7 +4,8 @@ const msg = document.getElementById("auth-callback-msg");
 
 async function main() {
   if (!isSupabaseConfigured()) {
-    msg.textContent = "Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.";
+    msg.textContent =
+      "Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.";
     return;
   }
 

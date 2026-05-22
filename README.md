@@ -9,7 +9,9 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints. On first load the app fetches ~200+ popular English books from Open Library, computes similarity in-browser, and draws the map. Searches hit Open Library again for titles not already on the map.
+Open the URL Vite prints. On first load the app fetches ~280 popular English books from Open Library, computes **TF-IDF similarity in the browser** (no neural embeddings), and draws the map. Searches hit Open Library again for titles not already on the map.
+
+**Initial catalog sources:** Open Library “reading log” popularity (`language:eng`, sorted by readinglog) plus subject shelves (fiction, sci-fi, fantasy, mystery, romance, biography, history, classics). There is no pre-baked embedding step on the live site — only the optional Python `build_books_data.py` script uses sklearn TF-IDF + UMAP for `public/data/books.json` fallback.
 
 ## Data (live APIs)
 
@@ -44,7 +46,7 @@ Sign in saves books to **your** list (read / reading / want to read). After logi
 
 1. Create a [Supabase](https://supabase.com) project.
 2. Run `supabase/migrations/001_bookmap_schema.sql` in the SQL editor.
-3. Copy `.env.example` → `.env.local` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+3. Copy `.env.example` → `.env.local` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` (from **Project Settings → API → Publishable key**, `sb_publishable_…`). The older `VITE_SUPABASE_ANON_KEY` name still works during Supabase’s migration.
 4. In Supabase **Authentication → URL configuration**, add redirect URLs:
    - `http://localhost:5173/bookmap/auth/callback.html` (or your Vite dev path)
    - `https://danialamin.com/bookmap/auth/callback.html` (production)
@@ -61,7 +63,7 @@ npm run build
 # push dist to gh-pages, or use the Actions workflow on danial-amin/bookmap
 ```
 
-Build with Supabase env vars set in CI or locally so the bundle includes your anon key (safe for client-side use with RLS).
+Build with Supabase env vars set in CI or locally so the bundle includes your publishable key (safe for the browser with RLS; never put secret/service keys in the frontend).
 
 ### Railway (optional Node host)
 

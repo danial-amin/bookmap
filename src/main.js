@@ -403,11 +403,15 @@ async function expandSimilarFromOpenLibrary(book) {
     const candidates = related
       .map((r) => state.byId.get(r.id))
       .filter(Boolean);
-    const local = state.books.filter((b) => b.id !== book.id);
     const merged = new Map();
-    for (const b of [...candidates, ...local]) merged.set(b.id, b);
+    for (const b of candidates) merged.set(b.id, b);
+    for (const n of book.neighbors || []) {
+      const b = state.byId.get(n.id);
+      if (b) merged.set(b.id, b);
+    }
 
-    const ranked = rankSimilarBooks(book, [...merged.values()]);
+    let ranked = rankSimilarBooks(book, [...merged.values()]);
+    ranked = ranked.filter((n) => n.similarity >= 0.06);
     applyRadialNeighbors(book, ranked);
     const shown = state.radialNeighbors.length;
     const newHint =
@@ -754,7 +758,7 @@ async function loadLiveData({ forceRefresh = false } = {}) {
 
   try {
     books = await loadLiveCatalog({
-      target: 400,
+      target: 280,
       onProgress: setLoaderDetail,
     });
   } catch (liveErr) {
@@ -770,9 +774,15 @@ async function loadLiveData({ forceRefresh = false } = {}) {
   }
 
   setLoaderDetail("Arranging books on the map…");
-  if (!books[0]?.x || !books[0]?.neighbors?.length) {
+  const hasGraph =
+    typeof books[0]?.x === "number" &&
+    typeof books[0]?.y === "number" &&
+    (books[0]?.neighbors?.length ?? 0) >= 8;
+
+  if (!hasGraph) {
     refreshBookGraph(books);
   }
+
   setBooks(books);
   saveCatalogCache(books);
 
@@ -782,13 +792,7 @@ async function loadLiveData({ forceRefresh = false } = {}) {
 
   setStatus(`${books.length} books on the map (${source}). Search any title.`);
 
-  enrichBooks(books, { limit: 40, onProgress: setStatus })
-    .then(() => {
-      refreshBookGraph(books);
-      saveCatalogCache(books);
-      render();
-    })
-    .catch(() => {});
+  enrichBooks(books, { limit: 20, onProgress: setStatus }).catch(() => {});
 }
 
 function initLibraryEvents() {

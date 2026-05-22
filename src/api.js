@@ -1,3 +1,5 @@
+import { subjectTags, refreshBookGraph, SIM_ALGO_VERSION } from "./similarity.js";
+
 const OL = "https://openlibrary.org";
 const UA = "Bookmap/1.0 (danial-amin; Open Library client)";
 
@@ -199,43 +201,107 @@ function normalizeTitle(s) {
     .trim();
 }
 
+function stripLeadingArticle(s) {
+  return s.replace(/^(the|a|an)\s+/, "");
+}
+
+function stripEditionSuffix(title) {
+  return title.replace(/\s*\([^)]*\)\s*$/g, "").trim();
+}
+
 function titleMatchScore(query, title) {
   if (title === query) return 100;
   if (title.startsWith(query) || query.startsWith(title)) {
-    return 85 - Math.min(20, Math.abs(title.length - query.length));
+    return 88 - Math.min(24, Math.abs(title.length - query.length));
   }
-  if (title.includes(query)) return 70 - Math.min(30, title.length - query.length);
+  if (title.includes(query)) return 72 - Math.min(32, title.length - query.length);
+  if (query.includes(title) && title.length >= 4) {
+    return 65 - Math.min(20, query.length - title.length);
+  }
   const words = query.split(" ").filter((w) => w.length > 2);
   if (!words.length) return 0;
   const hits = words.filter((w) => title.includes(w)).length;
-  return (hits / words.length) * 55;
+  let score = (hits / words.length) * 58;
+  if (hits === words.length && title.length > query.length + 12) {
+    score -= 12;
+  }
+  return score;
+}
+
+function searchHitScore(query, hit) {
+  const rawQ = normalizeTitle(query.trim());
+  const rawT = normalizeTitle(hit.title);
+  const coreT = normalizeTitle(stripEditionSuffix(hit.title));
+
+  let score = Math.max(
+    titleMatchScore(rawQ, rawT),
+    titleMatchScore(rawQ, coreT),
+    titleMatchScore(stripLeadingArticle(rawQ), stripLeadingArticle(rawT)),
+    titleMatchScore(stripLeadingArticle(rawQ), stripLeadingArticle(coreT))
+  );
+
+  if (SKIP_TITLE.test(hit.title)) score -= 60;
+
+  const lenRatio = rawT.length / Math.max(rawQ.length, 1);
+  if (lenRatio > 2.2) score -= 18;
+  else if (lenRatio > 1.6) score -= 8;
+
+  if (hit.ratings_count > 20) {
+    score += Math.min(14, Math.log10(hit.ratings_count + 1) * 5);
+  }
+  if (hit.cover_i) score += 4;
+  if (hit.first_publish_year && hit.first_publish_year > 1990 && hit.first_publish_year < 2030) {
+    score += 1;
+  }
+
+  return score;
 }
 
 /** Pick the hit that best matches what the user typed (not merely the first API result). */
 export function pickBestSearchMatch(query, hits) {
   if (!hits?.length) return null;
   const nq = normalizeTitle(query.trim());
-  const exact = hits.filter((h) => normalizeTitle(h.title) === nq);
+
+  const exact = hits.filter((h) => {
+    const t = normalizeTitle(h.title);
+    const core = normalizeTitle(stripEditionSuffix(h.title));
+    return t === nq || core === nq;
+  });
   if (exact.length === 1) return exact[0];
   if (exact.length > 1) {
-    exact.sort((a, b) => a.title.length - b.title.length);
+    exact.sort((a, b) => (b.ratings_count || 0) - (a.ratings_count || 0) || a.title.length - b.title.length);
     return exact[0];
   }
 
   let best = null;
   let bestScore = -1;
   for (const h of hits) {
-    const score = titleMatchScore(nq, normalizeTitle(h.title));
+    const score = searchHitScore(query, h);
     if (score > bestScore) {
       bestScore = score;
       best = h;
     }
   }
-  return bestScore >= 28 ? best : hits[0];
+  return bestScore >= 32 ? best : hits[0];
 }
 
-/** Pull more related works from Open Library (author + subjects), not just the local map set. */
-export async function fetchRelatedBooks(book, limit = 50) {
+function relatedSubjectQueries(book) {
+  const tags = [...subjectTags(book)];
+  const queries = [];
+  for (const tag of tags.slice(0, 3)) {
+    queries.push(`subject:"${tag}"`);
+  }
+  for (const raw of (book.subjects || []).slice(0, 2)) {
+    const head = raw.split("/")[0].trim().slice(0, 40);
+    if (head.length >= 4 && !queries.some((q) => q.includes(head))) {
+      queries.push(`subject:"${head}"`);
+    }
+  }
+  return queries;
+}
+
+/** Pull related works: subjects first (thematic), then a small author slice. */
+export async function fetchRelatedBooks(book, limit = 36) {
   const seen = new Set([book.id]);
   const out = [];
 
@@ -248,37 +314,20 @@ export async function fetchRelatedBooks(book, limit = 50) {
     }
   };
 
+  const subjectQueries = relatedSubjectQueries(book).slice(0, 3);
+  const subjectFetches = subjectQueries.map((q) =>
+    searchBooksOnce(q, 18).catch(() => [])
+  );
   if (book.author && book.author !== "Unknown") {
-    try {
-      addHits(await searchBooksOnce(`author_name:"${book.author}"`, 35));
-    } catch {
-      try {
-        addHits(await searchBooksOnce(book.author, 25));
-      } catch {
-        /* skip */
-      }
-    }
-    await sleep(80);
+    subjectFetches.push(
+      searchBooksOnce(`author_name:"${book.author}"`, 10).catch(() => [])
+    );
   }
 
-  for (const raw of (book.subjects || []).slice(0, 3)) {
+  const batches = await Promise.all(subjectFetches);
+  for (const hits of batches) {
+    addHits(hits);
     if (out.length >= limit) break;
-    const subject = raw.split("/")[0].trim().slice(0, 48);
-    if (subject.length < 4) continue;
-    try {
-      addHits(await searchBooksOnce(`subject:"${subject}"`, 25));
-    } catch {
-      /* skip */
-    }
-    await sleep(80);
-  }
-
-  if (out.length < 12) {
-    try {
-      addHits(await searchBooks(book.title, 20));
-    } catch {
-      /* skip */
-    }
   }
 
   return out.slice(0, limit);
@@ -296,7 +345,7 @@ export async function fetchWorkDescription(workKey) {
   return { description: (description || "").slice(0, 1200), subjects };
 }
 
-const CACHE_KEY = "bookmap-catalog-v4";
+const CACHE_KEY = "bookmap-catalog-v6";
 const CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 export function clearCatalogCache() {
@@ -323,11 +372,11 @@ export function loadCatalogCache() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
-    const { at, books } = JSON.parse(raw);
+    const { at, books, simVersion } = JSON.parse(raw);
     if (Date.now() - at > CACHE_TTL_MS) return null;
     if (!Array.isArray(books) || books.length < 20) return null;
     if (!isValidCachedBook(books[0])) return null;
-    return books;
+    return { books, simVersion: simVersion ?? 0 };
   } catch {
     return null;
   }
@@ -337,7 +386,11 @@ export function saveCatalogCache(books) {
   try {
     localStorage.setItem(
       CACHE_KEY,
-      JSON.stringify({ at: Date.now(), books: books.map(stripForCache) })
+      JSON.stringify({
+        at: Date.now(),
+        simVersion: SIM_ALGO_VERSION,
+        books: books.map(stripForCache),
+      })
     );
   } catch {
     /* quota */
@@ -365,11 +418,16 @@ function stripForCache(b) {
 /**
  * Load a live catalog from Open Library (reading-list popularity + subject shelves).
  */
-export async function loadLiveCatalog({ target = 400, onProgress } = {}) {
+export async function loadLiveCatalog({ target = 280, onProgress } = {}) {
   const cached = loadCatalogCache();
-  if (cached?.length >= 50) {
-    onProgress?.(`Loaded ${cached.length} books (cached).`);
-    return cached;
+  if (cached?.books?.length >= 50) {
+    const { books, simVersion } = cached;
+    if (simVersion === SIM_ALGO_VERSION && books[0]?.neighbors?.length) {
+      onProgress?.(`Loaded ${books.length} books from cache.`);
+      return books;
+    }
+    onProgress?.(`Loaded ${books.length} books from cache.`);
+    return books;
   }
 
   const byId = new Map();
@@ -424,7 +482,7 @@ export async function loadStaticFallback() {
   return books;
 }
 
-export async function enrichBooks(books, { limit = 80, onProgress } = {}) {
+export async function enrichBooks(books, { limit = 20, onProgress } = {}) {
   const need = books.filter((b) => !b.description && b.open_library_key).slice(0, limit);
   let done = 0;
   for (const book of need) {
