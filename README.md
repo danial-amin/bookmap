@@ -9,9 +9,17 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints. On first load the app fetches ~280 popular English books from Open Library, computes **TF-IDF similarity in the browser** (no neural embeddings), and draws the map. Searches hit Open Library again for titles not already on the map.
+Open the URL Vite prints. If you’ve populated the Supabase vector catalog, the map loads from there with **real embedding similarity** (sentence-transformers). Otherwise it falls back to Open Library live fetch with browser TF-IDF.
 
-**Initial catalog sources:** Open Library “reading log” popularity (`language:eng`, sorted by readinglog) plus subject shelves (fiction, sci-fi, fantasy, mystery, romance, biography, history, classics). There is no pre-baked embedding step on the live site — only the optional Python `build_books_data.py` script uses sklearn TF-IDF + UMAP for `public/data/books.json` fallback.
+### Populating the vector catalog (recommended)
+
+```bash
+pip install -r scripts/requirements.txt
+# Set SUPABASE_URL and SUPABASE_SERVICE_KEY in .env.local
+python scripts/embed_and_upload.py --limit 500
+```
+
+This fetches ~500 books, generates 384-dim embeddings with `all-MiniLM-L6-v2` locally, and uploads to Supabase pgvector. Run once; re-run to grow the catalog. After this, search and “find similar” use **cosine similarity over embeddings** instead of keyword matching.
 
 ## Data (live APIs)
 

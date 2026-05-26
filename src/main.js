@@ -11,6 +11,12 @@ import {
 } from "./api.js";
 import { refreshBookGraph, neighborsForBook, rankSimilarBooks } from "./similarity.js";
 import {
+  hasVectorCatalog,
+  loadVectorCatalog,
+  findSimilarByBookId,
+  searchVectorCatalog,
+} from "./vectors.js";
+import {
   bindAuthElements,
   initAuth,
   onAuthChange,
@@ -53,6 +59,7 @@ const state = {
   radialNeighbors: [],
   discoveryMode: "similar",
   libraryTab: "read",
+  useVectors: false,
 };
 
 const els = {
@@ -394,17 +401,45 @@ function renderSimilarList(center, ranked) {
   }
 }
 
-async function expandSimilarFromOpenLibrary(book) {
+async function expandSimilarVectors(book) {
+  setStatus(`Finding similar books for “${book.title}” (vector search)…`);
+  const excludeIds = [];
+  if (getUser() && state.discoveryMode === "new") {
+    for (const b of getReadBooks()) excludeIds.push(b.bookmap_id);
+  }
+
+  const results = await findSimilarByBookId(book.id, {
+    limit: 36,
+    excludeIds,
+  });
+
+  if (!results || !results.length) return false;
+
+  for (const r of results) addBook(r);
+  const ranked = results.map((r) => ({ id: r.id, similarity: r.similarity, book: r }));
+  applyRadialNeighbors(book, ranked);
+
+  const newHint =
+    getUser() && state.discoveryMode === "new"
+      ? " (excluding books you’ve already read)"
+      : "";
+  setStatus(
+    `${ranked.length} books around “${book.title}”${newHint} — closer = more similar.`
+  );
+  return true;
+}
+
+async function expandSimilarFallback(book) {
   setStatus(`Finding similar books for “${book.title}”…`);
   try {
-    const related = await fetchRelatedBooks(book, 55);
+    const related = await fetchRelatedBooks(book, 36);
     for (const r of related) addBook(r);
 
-    const candidates = related
-      .map((r) => state.byId.get(r.id))
-      .filter(Boolean);
     const merged = new Map();
-    for (const b of candidates) merged.set(b.id, b);
+    for (const r of related) {
+      const b = state.byId.get(r.id);
+      if (b) merged.set(b.id, b);
+    }
     for (const n of book.neighbors || []) {
       const b = state.byId.get(n.id);
       if (b) merged.set(b.id, b);
@@ -427,6 +462,18 @@ async function expandSimilarFromOpenLibrary(book) {
     applyRadialNeighbors(book, fallback);
     setStatus(`Showing ${fallback.length} similar books from the map.`);
   }
+}
+
+async function expandSimilar(book) {
+  if (state.useVectors) {
+    try {
+      const ok = await expandSimilarVectors(book);
+      if (ok) return;
+    } catch (err) {
+      console.warn("Vector search failed, falling back:", err);
+    }
+  }
+  await expandSimilarFallback(book);
 }
 
 async function focusBook(book, searchedAs = null) {
@@ -458,7 +505,7 @@ async function focusBook(book, searchedAs = null) {
   });
   history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
 
-  expandSimilarFromOpenLibrary(book).catch((err) => console.warn(err));
+  expandSimilar(book).catch((err) => console.warn(err));
 }
 
 function openDetailPanel(book) {
@@ -625,13 +672,33 @@ function exploreAll() {
 
 async function resolveBook(query) {
   const trimmed = query.trim();
-  setStatus(`Searching Open Library for “${trimmed}”…`);
+  setStatus(`Searching for “${trimmed}”…`);
 
+  // Try vector catalog search first (instant, local DB)
+  if (state.useVectors) {
+    try {
+      const vectorHits = await searchVectorCatalog(trimmed, 10);
+      if (vectorHits?.length) {
+        const best = pickBestSearchMatch(trimmed, vectorHits);
+        if (best) {
+          const book = addBook(best);
+          return { book, searchedAs: trimmed };
+        }
+      }
+    } catch (err) {
+      console.warn("Vector search failed:", err);
+    }
+  }
+
+  // Also check local map
+  const local = findLocalExactBook(trimmed);
+  if (local) return { book: local, searchedAs: trimmed };
+
+  // Fall back to Open Library
   let hits = [];
   try {
     hits = await searchBooks(trimmed, 24);
   } catch (err) {
-    const local = findLocalExactBook(trimmed);
     if (local) return { book: local, searchedAs: trimmed };
     throw err;
   }
@@ -639,8 +706,6 @@ async function resolveBook(query) {
   let book = hits.length ? pickBestSearchMatch(trimmed, hits) : null;
 
   if (!book) {
-    book = findLocalExactBook(trimmed);
-    if (book) return { book, searchedAs: trimmed };
     return null;
   }
 
@@ -751,25 +816,41 @@ async function loadLiveData({ forceRefresh = false } = {}) {
   els.retryBtn?.classList.add("hidden");
   els.loader.classList.remove("hidden");
   els.loader.setAttribute("aria-busy", "true");
-  setLoaderDetail("Connecting to Open Library…");
+  setLoaderDetail("Loading book catalog…");
 
   let books;
   let source = "Open Library";
 
+  // Try vector catalog from Supabase first
   try {
-    books = await loadLiveCatalog({
-      target: 280,
-      onProgress: setLoaderDetail,
-    });
-  } catch (liveErr) {
-    console.warn("Live catalog failed, trying fallback", liveErr);
-    setLoaderDetail("Open Library slow — loading saved catalog…");
+    const vectorsAvailable = await hasVectorCatalog();
+    if (vectorsAvailable) {
+      books = await loadVectorCatalog({ limit: 500, onProgress: setLoaderDetail });
+      source = "vector catalog";
+      state.useVectors = true;
+    }
+  } catch (err) {
+    console.warn("Vector catalog not available:", err);
+  }
+
+  // Fallback to Open Library live fetch
+  if (!books) {
+    setLoaderDetail("Connecting to Open Library…");
     try {
-      books = await loadStaticFallback();
-      source = "saved catalog";
-    } catch (fallbackErr) {
-      showLoadError(liveErr);
-      throw liveErr;
+      books = await loadLiveCatalog({
+        target: 280,
+        onProgress: setLoaderDetail,
+      });
+    } catch (liveErr) {
+      console.warn("Live catalog failed, trying fallback", liveErr);
+      setLoaderDetail("Open Library slow — loading saved catalog…");
+      try {
+        books = await loadStaticFallback();
+        source = "saved catalog";
+      } catch (fallbackErr) {
+        showLoadError(liveErr);
+        throw liveErr;
+      }
     }
   }
 
@@ -784,15 +865,18 @@ async function loadLiveData({ forceRefresh = false } = {}) {
   }
 
   setBooks(books);
-  saveCatalogCache(books);
+  if (!state.useVectors) saveCatalogCache(books);
 
   hideLoader();
   exploreAll();
   render();
 
-  setStatus(`${books.length} books on the map (${source}). Search any title.`);
+  const suffix = state.useVectors ? " (embedding-powered)" : "";
+  setStatus(`${books.length} books on the map (${source})${suffix}. Search any title.`);
 
-  enrichBooks(books, { limit: 20, onProgress: setStatus }).catch(() => {});
+  if (!state.useVectors) {
+    enrichBooks(books, { limit: 20, onProgress: setStatus }).catch(() => {});
+  }
 }
 
 function initLibraryEvents() {
